@@ -1,0 +1,22 @@
+{
+  "my_template": {
+    "template_id": "my_template",
+    "template_name": "My Decision Template",
+    "dimensions": [
+      "Value",
+      "Feasibility",
+      "Risk",
+      "Urgency"
+    ],
+    "weights": {
+      "Value": 1.0,
+      "Feasibility": 1.0,
+      "Risk": 1.0,
+      "Urgency": 1.0
+    },
+    "thresholds": {
+      "go": 8.0,
+      "review": 6.0
+    }
+  }
+}
