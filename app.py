@@ -1064,7 +1064,7 @@ def page_home():
     if st.button("Create a revised version (v2)", key="btn_make_v2"):
        base = st.session_state.last_record  # <-- your current session key
 
-    if not base:
+       if not base:
         st.warning("No prior decision found. Evaluate a decision first.")
     else:
         revised = dict(base)
