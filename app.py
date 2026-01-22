@@ -755,7 +755,11 @@ def page_home():
                 )
 
                 # Secondary action inside form: add suggested roles
-                add_roles = st.form_submit_button("Add suggested stakeholder roles", use_container_width=True)
+                add_roles = st.form_submit_button(
+                    "Add suggested stakeholder roles",
+                    use_container_width=True,
+                    key="btn_add_stakeholder_roles"
+                )
                 if add_roles:
                     dtype = st.session_state.get("decision_type", "Strategic")
                     sugg = suggested_stakeholders(dtype)
@@ -854,8 +858,12 @@ def page_home():
                         st.write(f"- {i}")
 
             # Primary submit button
-            submitted = st.form_submit_button("Evaluate Decision", use_container_width=True)
-
+            submitted = st.form_submit_button(
+                "Finalize Decision",
+                use_container_width=True,
+                disabled=(readiness.status == "BLOCK"),
+                help="Finalize only after governance checks are complete."
+            )
             if submitted:
                 template_key = st.session_state.get("tpl_select", list(ALL_TEMPLATES.keys())[0])
                 rule = ALL_TEMPLATES[template_key]
