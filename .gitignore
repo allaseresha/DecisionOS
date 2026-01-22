@@ -1,7 +1,14 @@
+# Python
 __pycache__/
 *.pyc
-.venv/
-venv/
-data/decision_history.jsonl
+
+# Streamlit
+.streamlit/
+*.log
+
+# Data & reports
+data/
 reports/
+
+# OS
 .DS_Store
