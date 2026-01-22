@@ -1061,24 +1061,26 @@ def page_home():
     st.subheader("Iteration (Re-score after fixes)")
     st.caption("This saves a new v2 record linked to the last decision you evaluated.")
 
-    if st.button("Create a revised version (v2)", key="btn_make_v2"):
-       base = st.session_state.get("last_record", None)  # <-- your current session key
+    clicked_v2 = st.button("Create a revised version (v2)", key="btn_make_v2")
 
-       if not base:
-        st.warning("No prior decision found. Evaluate a decision first.")
-    else:
-        revised = dict(base)
-        revised["decision_id"] = new_id()
-        revised["timestamp_utc"] = now_iso()
-        revised["parent_id"] = base["decision_id"]
-        revised["version"] = int(base.get("version", 1)) + 1
-        revised["title"] = f"{base.get('title','Untitled')} (Revised v{revised['version']})"
-        revised["schema_version"] = base.get("schema_version", 2)
-        revised["engine_version"] = ENGINE_VERSION
-        revised["ruleset_version"] = RULESET_VERSION
+    if clicked_v2:
+        base = st.session_state.get("last_record", None)
 
-        append_jsonl(HISTORY_PATH, revised)
-        st.success("Revised version saved. Go to History or Dashboard → Compare.")
+        if base is None:
+            st.warning("No prior decision found. Evaluate a decision first.")
+        else:
+            revised = dict(base)
+            revised["decision_id"] = new_id()
+            revised["timestamp_utc"] = now_iso()
+            revised["parent_id"] = base["decision_id"]
+            revised["version"] = int(base.get("version", 1)) + 1
+            revised["title"] = f"{base.get('title','Untitled')} (Revised v{revised['version']})"
+            revised["schema_version"] = base.get("schema_version", 2)
+            revised["engine_version"] = ENGINE_VERSION
+            revised["ruleset_version"] = RULESET_VERSION
+
+            append_jsonl(HISTORY_PATH, revised)
+            st.success("Revised version saved. Go to History or Dashboard → Compare.")
 
 # ----------------------------
 # Main app shell
