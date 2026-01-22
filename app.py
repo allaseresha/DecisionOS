@@ -18,6 +18,7 @@ from engine.scoring import (
 )
 from engine.explain import explain_decision
 from engine.scoring import ENGINE_VERSION, RULESET_VERSION
+from engine.readiness import calculate_decision_readiness
 from engine.storage import (
     append_jsonl,
     read_jsonl,
@@ -733,6 +734,10 @@ def page_home():
     st.subheader("Ownership & Governance")
 
     decision_owner = st.text_input("Decision owner (who is accountable?)", value="")
+    responsibility_confirmed = st.checkbox(
+    "I confirm I am accountable for this decision and accept ownership of the outcome.",
+    help="Industry-grade governance requires explicit ownership. Approval is blocked without this."
+    )
 
     stakeholders_text = st.text_area(
         "Stakeholders (one per line)",
@@ -749,6 +754,16 @@ def page_home():
     decision_type = st.selectbox(
        "What kind of decision is this?",
        ["Strategic", "Financial", "Hiring", "Operational", "Personal"]
+    )
+    decision_class = st.selectbox(
+       "Decision class (reversibility)",
+       ["One-way", "Two-way", "Experimental"],
+    index=1,
+    help="One-way is hard to reverse and requires higher scrutiny. Two-way is reversible. Experimental is a controlled trial."
+    )
+    responsibility_confirmed = st.checkbox(
+        "I confirm I am accountable for this decision and accept ownership of the outcome.",
+    help="Approval is blocked unless the decision owner explicitly accepts accountability."
     )
 
     st.markdown("---")
@@ -774,6 +789,44 @@ def page_home():
 
     assumptions_notes = st.text_area("Assumptions Notes (optional)", value="")
     unknowns_notes = st.text_area("Unknowns Notes (optional)", value="")
+    # ----------------------------
+    # Decision Readiness (LIVE PREVIEW)
+    # ----------------------------
+    # Preview score/confidence from current sliders (industry-grade: readiness updates live)
+    preview_final_score = compute_weighted_score(rule, scores)
+    preview_confidence = confidence_band(preview_final_score)
+
+    readiness = calculate_decision_readiness({
+    "owner": decision_owner.strip(),
+    "decision_type": decision_type,
+    "decision_class": decision_class,
+    "stakeholders": stakeholders,
+    "assumptions": assumptions,
+    "risks": unknowns,  # your "Unknowns / Risks" list
+    "confidence": preview_confidence,  # "High/Medium/Low" → readiness.py converts it
+    "weights": rule.weights,           # from template
+    "responsibility_confirmed": responsibility_confirmed,
+    })
+
+    st.markdown("---")
+    st.subheader("Decision Readiness (Governance Check)")
+
+    if readiness.status == "APPROVE":
+      st.success(f"Readiness: {readiness.score}% — APPROVE (min required: {readiness.min_required}%)")
+    elif readiness.status == "REVIEW":
+      st.warning(f"Readiness: {readiness.score}% — REVIEW (min required: {readiness.min_required}%)")
+    else:
+     st.error(f"Readiness: {readiness.score}% — BLOCKED (min required: {readiness.min_required}%)")
+
+    if readiness.blockers:
+      st.info("Hard blockers:")
+    for b in readiness.blockers:
+        st.write(f"- {b}")
+
+    if readiness.issues:
+     st.info("What to improve:")
+    for i in readiness.issues:
+        st.write(f"- {i}")
 
     # ----------------------------
     # STEP 11 — Scenario Stress Testing
@@ -791,10 +844,59 @@ def page_home():
         worst_delta = st.number_input("Worst-case delta (-)", value=-2.0, step=0.5)
 
     st.markdown("---")
+    st.markdown("---")
 
-    if st.button("Evaluate Decision"):
+    # ----------------------------
+    # Decision Readiness (Governance Gate)
+    # ----------------------------
+    preview_final_score = compute_weighted_score(rule, scores)
+    preview_confidence = confidence_band(preview_final_score)
+
+    readiness = calculate_decision_readiness({
+    "owner": decision_owner.strip(),
+    "decision_type": decision_type,
+    "decision_class": decision_class,
+    "stakeholders": stakeholders,
+    "assumptions": assumptions,
+    "risks": unknowns,               # your Unknowns / Risks list
+    "confidence": preview_confidence, # "High/Medium/Low"
+    "weights": rule.weights,
+    "responsibility_confirmed": responsibility_confirmed,
+    })
+
+    st.subheader("Decision Readiness (Governance Check)")
+
+    if readiness.status == "APPROVE":
+     st.success(f"Readiness: {readiness.score}% — APPROVE (min required: {readiness.min_required}%)")
+    elif readiness.status == "REVIEW":
+     st.warning(f"Readiness: {readiness.score}% — REVIEW (min required: {readiness.min_required}%)")
+    else:
+     st.error(f"Readiness: {readiness.score}% — BLOCKED (min required: {readiness.min_required}%)")
+
+    if readiness.blockers:
+     st.info("Hard blockers:")
+    for b in readiness.blockers:
+        st.write(f"- {b}")
+
+    if readiness.issues:
+     st.info("What to improve:")
+    for i in readiness.issues:
+        st.write(f"- {i}")
+
+    # ----------------------------
+    # Gate the Evaluate Decision button
+    # ----------------------------
+    if st.button("Evaluate Decision", disabled=(readiness.status == "BLOCK")):
+     ...
+    else:
+     if readiness.status == "BLOCK":
+        st.caption("Evaluation is blocked until readiness requirements are met.")
+    if st.button("Evaluate Decision", disabled=(readiness.status == "BLOCK")):
         t = title.strip() or "Untitled Decision"
         c = context.strip() or "N/A"
+    else:
+      if readiness.status == "BLOCK":
+        st.caption("Evaluation is blocked until readiness requirements are met.")
 
         final_score = compute_weighted_score(rule, scores)
         outcome = determine_outcome(rule, final_score)
