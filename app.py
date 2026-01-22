@@ -3,7 +3,7 @@ import json
 import streamlit as st
 
 # Must be first Streamlit call
-st.set_page_config(page_title="DecisionOS (MVP)", layout="centered")
+st.set_page_config(page_title="DecisionOS (MVP)", layout="wide")
 
 # ----------------------------
 # Imports (engine)
@@ -60,6 +60,38 @@ if "last_playbook" not in st.session_state:
 # ----------------------------
 # Helpers
 # ----------------------------
+def badge(text: str, tone: str = "neutral"):
+    tones = {
+        "neutral": ("#111827", "#E5E7EB"),
+        "good":    ("#065F46", "#D1FAE5"),
+        "warn":    ("#92400E", "#FEF3C7"),
+        "bad":     ("#7F1D1D", "#FEE2E2"),
+        "info":    ("#1E3A8A", "#DBEAFE"),
+    }
+    fg, bg = tones.get(tone, tones["neutral"])
+    st.markdown(
+        f"""
+        <span style="
+            display:inline-block;
+            padding:0.25rem 0.55rem;
+            border-radius:999px;
+            font-size:0.80rem;
+            font-weight:600;
+            color:{fg};
+            background:{bg};
+            border:1px solid rgba(0,0,0,0.06);
+            ">
+            {text}
+        </span>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def section_title(title: str, subtitle: str = ""):
+    st.markdown(f"### {title}")
+    if subtitle:
+        st.caption(subtitle)
 def get_all_templates():
     custom = load_custom_templates()
     merged = dict(TEMPLATES)
@@ -615,224 +647,372 @@ def page_template_builder():
 
 
 def page_home():
-    st.subheader("Create a Decision")
+    # ---------- Executive header ----------
+    head_l, head_r = st.columns([0.72, 0.28], vertical_alignment="center")
+    with head_l:
+        st.title("DecisionOS")
+        st.caption("Explainable • Auditable • Governance-First Decision Intelligence for High-Stakes Decisions")
+
+    with head_r:
+        badge(f"Engine {ENGINE_VERSION}", "info")
+        st.write("")
+        badge(f"Ruleset {RULESET_VERSION}", "info")
+
+    st.divider()
 
     ALL_TEMPLATES = get_all_templates()
 
-    template_key = st.selectbox(
-        "Select template",
-        options=list(ALL_TEMPLATES.keys()),
-        format_func=lambda k: ALL_TEMPLATES[k].template_name,
-        key="tpl_select",
-    )
-    rule = ALL_TEMPLATES[template_key]
+    # Two-column enterprise layout
+    form_col, summary_col = st.columns([0.66, 0.34], gap="large")
 
-    title = st.text_input("Decision title (short)", value="", key="decision_title")
-    context = st.text_area("Decision context (1–3 lines)", value="", key="decision_context")
+    # =========================
+    # LEFT: Guided Workflow Form
+    # =========================
+    with form_col:
+        with st.form("home_decision_form", clear_on_submit=False, border=True):
 
-    st.markdown("---")
-    st.subheader("Ownership & Governance")
+            tabs = st.tabs([
+                "1) Define",
+                "2) Governance",
+                "3) Scoring",
+                "4) Assumptions",
+                "5) Stress Test",
+                "6) Review",
+            ])
 
-    decision_owner = st.text_input("Decision owner (who is accountable?)", value="", key="decision_owner")
-    responsibility_confirmed = st.checkbox(
-        "I confirm I am accountable for this decision and accept ownership of the outcome.",
-        help="Industry-grade governance requires explicit ownership. Approval is blocked without this.",
-        key="responsibility_confirmed",
-    )
+            # ----------------------------
+            # TAB 1: Define
+            # ----------------------------
+            with tabs[0]:
+                section_title("Define the decision", "Start with scope and template selection.")
 
-    stakeholders_text = st.text_area(
-        "Stakeholders (one per line)",
-        value="",
-        help="People who were involved, consulted, or need to be informed.",
-        key="stakeholders_text",
-    )
-    stakeholders = [x.strip() for x in stakeholders_text.splitlines() if x.strip()]
+                template_key = st.selectbox(
+                    "Select template",
+                    options=list(ALL_TEMPLATES.keys()),
+                    format_func=lambda k: ALL_TEMPLATES[k].template_name,
+                    key="tpl_select",
+                )
+                rule = ALL_TEMPLATES[template_key]
 
-    review_date = st.date_input(
-        "Review date (when should we revisit this decision?)",
-        value=None,
-        key="review_date",
-    )
+                title = st.text_input("Decision title (short)", value="", key="decision_title")
+                context = st.text_area("Decision context (1–3 lines)", value="", key="decision_context")
 
-    st.markdown("### Decision type")
-    decision_type = st.selectbox(
-        "What kind of decision is this?",
-        ["Strategic", "Financial", "Hiring", "Operational", "Personal"],
-        key="decision_type",
-    )
+            # ----------------------------
+            # TAB 2: Governance
+            # ----------------------------
+            with tabs[1]:
+                section_title("Ownership & governance", "Enterprise decisions require explicit accountability.")
 
-    decision_class = st.selectbox(
-        "Decision class (reversibility)",
-        ["One-way", "Two-way", "Experimental"],
-        index=1,
-        help="One-way is hard to reverse and requires higher scrutiny. Two-way is reversible. Experimental is a controlled trial.",
-        key="decision_class",
-    )
+                decision_owner = st.text_input("Decision owner (who is accountable?)", value="", key="decision_owner")
 
-    st.markdown("---")
-    st.write("### Score the dimensions (0 to 10)")
-    st.caption("10 = best. If a dimension represents risk/complexity, give a lower score when risk/complexity is high.")
+                responsibility_confirmed = st.checkbox(
+                    "I confirm I am accountable for this decision and accept ownership of the outcome.",
+                    help="Industry-grade governance requires explicit ownership. Approval is blocked without this.",
+                    key="responsibility_confirmed",
+                )
 
-    scores = {}
-    for dim in rule.dimensions:
-        scores[dim] = st.slider(dim, min_value=0.0, max_value=10.0, value=5.0, step=0.5, key=f"score_{dim}")
+                stakeholders_text = st.text_area(
+                    "Stakeholders (one per line)",
+                    value="",
+                    help="People who were involved, consulted, or need to be informed.",
+                    key="stakeholders_text",
+                )
+                stakeholders = [x.strip() for x in stakeholders_text.splitlines() if x.strip()]
 
-    st.markdown("---")
-    st.subheader("Assumptions & Unknowns")
-    st.caption("Write one item per line. These are saved for auditability and reports.")
+                review_date = st.date_input(
+                    "Review date (when should we revisit this decision?)",
+                    value=None,
+                    key="review_date",
+                )
 
-    assumptions_text = st.text_area("Assumptions (one per line)", value="", key="assumptions_text")
-    unknowns_text = st.text_area("Unknowns / Risks (one per line)", value="", key="unknowns_text")
+                c1, c2 = st.columns(2)
+                with c1:
+                    decision_type = st.selectbox(
+                        "Decision type",
+                        ["Strategic", "Financial", "Hiring", "Operational", "Personal"],
+                        key="decision_type",
+                    )
+                with c2:
+                    decision_class = st.selectbox(
+                        "Decision class (reversibility)",
+                        ["One-way", "Two-way", "Experimental"],
+                        index=1,
+                        help="One-way is hard to reverse and requires higher scrutiny. Two-way is reversible. Experimental is a controlled trial.",
+                        key="decision_class",
+                    )
 
-    assumptions = [x.strip() for x in assumptions_text.splitlines() if x.strip()]
-    unknowns = [x.strip() for x in unknowns_text.splitlines() if x.strip()]
+            # ----------------------------
+            # TAB 3: Scoring
+            # ----------------------------
+            with tabs[2]:
+                section_title("Score the dimensions", "0–10 scoring with transparent weights.")
+                st.caption("10 = best. If a dimension represents risk/complexity, give a lower score when risk/complexity is high.")
 
-    assumptions_notes = st.text_area("Assumptions Notes (optional)", value="", key="assumptions_notes")
-    unknowns_notes = st.text_area("Unknowns Notes (optional)", value="", key="unknowns_notes")
+                # rule must be available; if user hasn't opened Define tab yet, we still have template_key set
+                # because it's in the form. Ensure rule exists:
+                rule = ALL_TEMPLATES[st.session_state.get("tpl_select", list(ALL_TEMPLATES.keys())[0])]
 
-    st.markdown("---")
-    st.subheader("Scenario Stress Testing")
-    st.caption("We adjust the final score by +/- deltas to simulate best/expected/worst case outcomes.")
+                scores = {}
+                for dim in rule.dimensions:
+                    scores[dim] = st.slider(
+                        dim, min_value=0.0, max_value=10.0, value=5.0, step=0.5, key=f"score_{dim}"
+                    )
 
-    cS1, cS2, cS3 = st.columns(3)
-    with cS1:
-        best_delta = st.number_input("Best-case delta (+)", value=1.0, step=0.5, key="best_delta")
-    with cS2:
-        expected_delta = st.number_input("Expected delta", value=0.0, step=0.5, key="expected_delta")
-    with cS3:
-        worst_delta = st.number_input("Worst-case delta (-)", value=-2.0, step=0.5, key="worst_delta")
+            # ----------------------------
+            # TAB 4: Assumptions & Unknowns
+            # ----------------------------
+            with tabs[3]:
+                section_title("Assumptions & unknowns", "Captured for auditability and later learning.")
+                st.caption("Write one item per line. These are saved for reports and history.")
 
-    # ----------------------------
-    # Decision Readiness (LIVE PREVIEW)
-    # ----------------------------
-    preview_final_score = compute_weighted_score(rule, scores)
-    preview_confidence = confidence_band(preview_final_score)
+                assumptions_text = st.text_area("Assumptions (one per line)", value="", key="assumptions_text")
+                unknowns_text = st.text_area("Unknowns / Risks (one per line)", value="", key="unknowns_text")
 
-    readiness = calculate_decision_readiness(
-        {
-            "owner": decision_owner.strip(),
-            "decision_type": decision_type,
-            "decision_class": decision_class,
-            "stakeholders": stakeholders,
-            "assumptions": assumptions,
-            "risks": unknowns,
-            "confidence": preview_confidence,
-            "weights": rule.weights,
-            "responsibility_confirmed": responsibility_confirmed,
-        }
-    )
+                assumptions = [x.strip() for x in assumptions_text.splitlines() if x.strip()]
+                unknowns = [x.strip() for x in unknowns_text.splitlines() if x.strip()]
 
-    st.markdown("---")
-    st.subheader("Decision Readiness (Governance Check)")
+                assumptions_notes = st.text_area("Assumptions Notes (optional)", value="", key="assumptions_notes")
+                unknowns_notes = st.text_area("Unknowns Notes (optional)", value="", key="unknowns_notes")
 
-    if readiness.status == "APPROVE":
-        st.success(f"Readiness: {readiness.score}% — APPROVE (min required: {readiness.min_required}%)")
-    elif readiness.status == "REVIEW":
-        st.warning(f"Readiness: {readiness.score}% — REVIEW (min required: {readiness.min_required}%)")
-    else:
-        st.error(f"Readiness: {readiness.score}% — BLOCKED (min required: {readiness.min_required}%)")
+            # ----------------------------
+            # TAB 5: Stress Test
+            # ----------------------------
+            with tabs[4]:
+                section_title("Scenario stress testing", "Simulate best/expected/worst outcomes.")
+                st.caption("We adjust the final score by +/- deltas to simulate outcomes.")
 
-    if readiness.blockers:
-        st.info("Hard blockers:")
-        for b in readiness.blockers:
-            st.write(f"- {b}")
+                cS1, cS2, cS3 = st.columns(3)
+                with cS1:
+                    best_delta = st.number_input("Best-case delta (+)", value=1.0, step=0.5, key="best_delta")
+                with cS2:
+                    expected_delta = st.number_input("Expected delta", value=0.0, step=0.5, key="expected_delta")
+                with cS3:
+                    worst_delta = st.number_input("Worst-case delta (-)", value=-2.0, step=0.5, key="worst_delta")
 
-    if readiness.issues:
-        st.info("What to improve:")
-        for i in readiness.issues:
-            st.write(f"- {i}")
+            # ----------------------------
+            # TAB 6: Review (Readiness)
+            # ----------------------------
+            with tabs[5]:
+                section_title("Readiness review", "Governance gate before evaluation.")
 
-    st.markdown("---")
+                # Re-resolve values (safe)
+                rule = ALL_TEMPLATES[st.session_state.get("tpl_select", list(ALL_TEMPLATES.keys())[0])]
 
-    # ----------------------------
-    # Gate the Evaluate Decision button (SINGLE BUTTON + KEY)
-    # ----------------------------
-    clicked = st.button(
-        "Evaluate Decision",
-        disabled=(readiness.status == "BLOCK"),
-        key="btn_evaluate_decision",
-    )
+                # Build scores from session_state sliders
+                scores = {}
+                for dim in rule.dimensions:
+                    scores[dim] = float(st.session_state.get(f"score_{dim}", 5.0))
 
-    if clicked:
-        t = title.strip() or "Untitled Decision"
-        c = context.strip() or "N/A"
+                preview_final_score = compute_weighted_score(rule, scores)
+                preview_confidence = confidence_band(preview_final_score)
 
-        final_score = compute_weighted_score(rule, scores)
-        outcome = determine_outcome(rule, final_score)
-        confidence = confidence_band(final_score)
-        explanation = explain_decision(rule, scores)
-        playbook = build_playbook(rule, scores, final_score, outcome, explanation)
+                stakeholders = [x.strip() for x in (st.session_state.get("stakeholders_text", "") or "").splitlines() if x.strip()]
+                assumptions = [x.strip() for x in (st.session_state.get("assumptions_text", "") or "").splitlines() if x.strip()]
+                unknowns = [x.strip() for x in (st.session_state.get("unknowns_text", "") or "").splitlines() if x.strip()]
 
-        expected_score = _clamp_0_10(final_score + expected_delta)
-        best_score = _clamp_0_10(final_score + best_delta)
-        worst_score = _clamp_0_10(final_score + worst_delta)
+                readiness = calculate_decision_readiness(
+                    {
+                        "owner": (st.session_state.get("decision_owner", "") or "").strip(),
+                        "decision_type": st.session_state.get("decision_type"),
+                        "decision_class": st.session_state.get("decision_class"),
+                        "stakeholders": stakeholders,
+                        "assumptions": assumptions,
+                        "risks": unknowns,
+                        "confidence": preview_confidence,
+                        "weights": rule.weights,
+                        "responsibility_confirmed": bool(st.session_state.get("responsibility_confirmed", False)),
+                    }
+                )
 
-        scenario_results = {
-            "expected": {"score": expected_score, "outcome": determine_outcome(rule, expected_score), "confidence": confidence_band(expected_score)},
-            "best": {"score": best_score, "outcome": determine_outcome(rule, best_score), "confidence": confidence_band(best_score)},
-            "worst": {"score": worst_score, "outcome": determine_outcome(rule, worst_score), "confidence": confidence_band(worst_score)},
-        }
+                if readiness.status == "APPROVE":
+                    badge(f"Readiness: {readiness.score}% — APPROVE", "good")
+                    st.caption(f"Minimum required: {readiness.min_required}%")
+                elif readiness.status == "REVIEW":
+                    badge(f"Readiness: {readiness.score}% — REVIEW", "warn")
+                    st.caption(f"Minimum required: {readiness.min_required}%")
+                else:
+                    badge(f"Readiness: {readiness.score}% — BLOCKED", "bad")
+                    st.caption(f"Minimum required: {readiness.min_required}%")
 
-        scenario_stress_test = {
-            "expected_delta": float(expected_delta),
-            "best_delta": float(best_delta),
-            "worst_delta": float(worst_delta),
-            "results": scenario_results,
-            "spread": round(best_score - worst_score, 2),
-        }
+                if readiness.blockers:
+                    st.info("Hard blockers:")
+                    for b in readiness.blockers:
+                        st.write(f"- {b}")
 
-        record = {
-            "decision_id": new_id(),
-            "timestamp_utc": now_iso(),
-            "schema_version": 2,
-            "template_id": rule.template_id,
-            "template_name": rule.template_name,
-            "title": t,
-            "context": c,
-            "decision_type": decision_type,
-            "decision_class": decision_class,
-            "engine_version": ENGINE_VERSION,
-            "ruleset_version": RULESET_VERSION,
-            "decision_owner": decision_owner.strip(),
-            "stakeholders": stakeholders,
-            "review_date": str(review_date) if review_date else "",
-            "assumptions": assumptions,
-            "unknowns": unknowns,
-            "assumptions_notes": assumptions_notes.strip(),
-            "unknowns_notes": unknowns_notes.strip(),
-            "scores": scores,
-            "final_score": final_score,
-            "scenario_stress_test": scenario_stress_test,
-            "outcome": outcome,
-            "confidence": confidence,
-            "explanation": explanation,
-            "playbook": playbook,
-            "parent_id": None,
-            "version": 1,
-            "readiness_score": readiness.score,
-            "readiness_status": readiness.status,
-            "readiness_min_required": readiness.min_required,
-            "readiness_blockers": readiness.blockers,
-            "readiness_issues": readiness.issues,
-            "responsibility_confirmed": responsibility_confirmed,
-        }
+                if readiness.issues:
+                    st.info("What to improve:")
+                    for i in readiness.issues:
+                        st.write(f"- {i}")
 
-        append_jsonl(HISTORY_PATH, record)
-        st.session_state.last_record = record
-        st.session_state.last_playbook = playbook
-        st.success("Decision evaluated and saved to history.")
-    else:
-        if readiness.status == "BLOCK":
-            st.caption("Evaluation is blocked until readiness requirements are met.")
+            # ----------------------------
+            # Single submit button
+            # ----------------------------
+            submitted = st.form_submit_button("Evaluate Decision", use_container_width=True)
 
-    # ----------------------------
-    # Show latest result if available
-    # ----------------------------
+            # ----------------------------
+            # Submit handling
+            # ----------------------------
+            if submitted:
+                # Resolve all values once (clean)
+                template_key = st.session_state.get("tpl_select", list(ALL_TEMPLATES.keys())[0])
+                rule = ALL_TEMPLATES[template_key]
+
+                t = (st.session_state.get("decision_title", "") or "").strip() or "Untitled Decision"
+                c = (st.session_state.get("decision_context", "") or "").strip() or "N/A"
+
+                decision_owner = (st.session_state.get("decision_owner", "") or "").strip()
+                responsibility_confirmed = bool(st.session_state.get("responsibility_confirmed", False))
+
+                stakeholders_text = st.session_state.get("stakeholders_text", "") or ""
+                stakeholders = [x.strip() for x in stakeholders_text.splitlines() if x.strip()]
+
+                review_date = st.session_state.get("review_date", None)
+                decision_type = st.session_state.get("decision_type")
+                decision_class = st.session_state.get("decision_class")
+
+                assumptions_text = st.session_state.get("assumptions_text", "") or ""
+                unknowns_text = st.session_state.get("unknowns_text", "") or ""
+                assumptions = [x.strip() for x in assumptions_text.splitlines() if x.strip()]
+                unknowns = [x.strip() for x in unknowns_text.splitlines() if x.strip()]
+
+                assumptions_notes = (st.session_state.get("assumptions_notes", "") or "").strip()
+                unknowns_notes = (st.session_state.get("unknowns_notes", "") or "").strip()
+
+                best_delta = float(st.session_state.get("best_delta", 1.0))
+                expected_delta = float(st.session_state.get("expected_delta", 0.0))
+                worst_delta = float(st.session_state.get("worst_delta", -2.0))
+
+                scores = {}
+                for dim in rule.dimensions:
+                    scores[dim] = float(st.session_state.get(f"score_{dim}", 5.0))
+
+                # Readiness gating (enforced at submit)
+                preview_final_score = compute_weighted_score(rule, scores)
+                preview_confidence = confidence_band(preview_final_score)
+
+                readiness = calculate_decision_readiness(
+                    {
+                        "owner": decision_owner,
+                        "decision_type": decision_type,
+                        "decision_class": decision_class,
+                        "stakeholders": stakeholders,
+                        "assumptions": assumptions,
+                        "risks": unknowns,
+                        "confidence": preview_confidence,
+                        "weights": rule.weights,
+                        "responsibility_confirmed": responsibility_confirmed,
+                    }
+                )
+
+                if readiness.status == "BLOCK":
+                    st.error("Evaluation blocked by governance readiness. Fix blockers/issues in the Review tab.")
+                    st.session_state.last_record = None
+                    st.session_state.last_playbook = None
+                return
+
+                # Run engine (same as your old logic)
+                final_score = compute_weighted_score(rule, scores)
+                outcome = determine_outcome(rule, final_score)
+                confidence = confidence_band(final_score)
+                explanation = explain_decision(rule, scores)
+                playbook = build_playbook(rule, scores, final_score, outcome, explanation)
+
+                expected_score = _clamp_0_10(final_score + expected_delta)
+                best_score = _clamp_0_10(final_score + best_delta)
+                worst_score = _clamp_0_10(final_score + worst_delta)
+
+                scenario_results = {
+                    "expected": {"score": expected_score, "outcome": determine_outcome(rule, expected_score), "confidence": confidence_band(expected_score)},
+                    "best": {"score": best_score, "outcome": determine_outcome(rule, best_score), "confidence": confidence_band(best_score)},
+                    "worst": {"score": worst_score, "outcome": determine_outcome(rule, worst_score), "confidence": confidence_band(worst_score)},
+                }
+
+                scenario_stress_test = {
+                    "expected_delta": float(expected_delta),
+                    "best_delta": float(best_delta),
+                    "worst_delta": float(worst_delta),
+                    "results": scenario_results,
+                    "spread": round(best_score - worst_score, 2),
+                }
+
+                record = {
+                    "decision_id": new_id(),
+                    "timestamp_utc": now_iso(),
+                    "schema_version": 2,
+                    "template_id": rule.template_id,
+                    "template_name": rule.template_name,
+                    "title": t,
+                    "context": c,
+                    "decision_type": decision_type,
+                    "decision_class": decision_class,
+                    "engine_version": ENGINE_VERSION,
+                    "ruleset_version": RULESET_VERSION,
+                    "decision_owner": decision_owner,
+                    "stakeholders": stakeholders,
+                    "review_date": str(review_date) if review_date else "",
+                    "assumptions": assumptions,
+                    "unknowns": unknowns,
+                    "assumptions_notes": assumptions_notes,
+                    "unknowns_notes": unknowns_notes,
+                    "scores": scores,
+                    "final_score": final_score,
+                    "scenario_stress_test": scenario_stress_test,
+                    "outcome": outcome,
+                    "confidence": confidence,
+                    "explanation": explanation,
+                    "playbook": playbook,
+                    "parent_id": None,
+                    "version": 1,
+                    "readiness_score": readiness.score,
+                    "readiness_status": readiness.status,
+                    "readiness_min_required": readiness.min_required,
+                    "readiness_blockers": readiness.blockers,
+                    "readiness_issues": readiness.issues,
+                    "responsibility_confirmed": responsibility_confirmed,
+                }
+
+                append_jsonl(HISTORY_PATH, record)
+                st.session_state.last_record = record
+                st.session_state.last_playbook = playbook
+                st.success("Decision evaluated and saved to history.")
+
+    # =========================
+    # RIGHT: Decision Summary Panel
+    # =========================
+    with summary_col:
+        st.markdown("#### Decision Summary")
+        st.caption("Executive snapshot (draft values + last evaluation).")
+
+        # Draft snapshot (session_state)
+        badge("Draft", "info")
+        st.write("")
+        st.write("**Title:**", (st.session_state.get("decision_title", "") or "").strip() or "—")
+        st.write("**Owner:**", (st.session_state.get("decision_owner", "") or "").strip() or "—")
+        st.write("**Type:**", st.session_state.get("decision_type", "—"))
+        st.write("**Class:**", st.session_state.get("decision_class", "—"))
+
+        st.divider()
+
+        # Last evaluation snapshot
+        st.markdown("#### Last Evaluation")
+        if st.session_state.last_record:
+            r = st.session_state.last_record
+            badge(f"{r.get('outcome')}", "good" if r.get("outcome") == "GO" else "warn" if r.get("outcome") == "REVIEW" else "bad")
+            st.metric("Final Score", f"{r.get('final_score')} / 10")
+            st.write("**Confidence:**", r.get("confidence"))
+            st.caption(f"Saved: {r.get('timestamp_utc')}")
+        else:
+            st.caption("No evaluation yet in this session.")
+
+    # =========================
+    # Show latest result (unchanged logic, just kept below)
+    # =========================
     if st.session_state.last_record:
         r = st.session_state.last_record
         pb = st.session_state.last_playbook
         decision_id = normalize_decision_id(r.get("decision_id"))
 
+        st.markdown("---")
         st.subheader("Result")
         c1, c2, c3 = st.columns(3)
         c1.metric("Final Score", f"{r.get('final_score')} / 10")
@@ -874,30 +1054,29 @@ def page_home():
             st.caption("No stakeholders captured.")
         st.write("**Review date:**", r.get("review_date") or "—")
 
-    # Iteration
+    # Iteration (keep as-is)
     st.markdown("---")
     st.subheader("Iteration (Re-score after fixes)")
     st.caption("This saves a new v2 record linked to the last decision you evaluated.")
 
     if st.button("Create a revised version (v2)", key="btn_make_v2"):
         base = st.session_state.last_record
-        if not base:
+    if not base:
             st.warning("No prior decision found. Evaluate a decision first.")
-            return
+    return
 
-        revised = dict(base)
-        revised["decision_id"] = new_id()
-        revised["timestamp_utc"] = now_iso()
-        revised["parent_id"] = base["decision_id"]
-        revised["version"] = int(base.get("version", 1)) + 1
-        revised["title"] = f"{base.get('title','Untitled')} (Revised v{revised['version']})"
-        revised["schema_version"] = base.get("schema_version", 2)
-        revised["engine_version"] = ENGINE_VERSION
-        revised["ruleset_version"] = RULESET_VERSION
+    revised = dict(base)
+    revised["decision_id"] = new_id()
+    revised["timestamp_utc"] = now_iso()
+    revised["parent_id"] = base["decision_id"]
+    revised["version"] = int(base.get("version", 1)) + 1
+    revised["title"] = f"{base.get('title','Untitled')} (Revised v{revised['version']})"
+    revised["schema_version"] = base.get("schema_version", 2)
+    revised["engine_version"] = ENGINE_VERSION
+    revised["ruleset_version"] = RULESET_VERSION
 
-        append_jsonl(HISTORY_PATH, revised)
-        st.success("Revised version saved. Go to History or Dashboard → Compare.")
-
+    append_jsonl(HISTORY_PATH, revised)
+    st.success("Revised version saved. Go to History or Dashboard → Compare.")
 
 # ----------------------------
 # Main app shell
