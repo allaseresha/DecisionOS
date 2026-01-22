@@ -92,6 +92,58 @@ def section_title(title: str, subtitle: str = ""):
     st.markdown(f"### {title}")
     if subtitle:
         st.caption(subtitle)
+def _is_blank(x: str) -> bool:
+    return not (x or "").strip()
+
+def compute_completeness(ss: dict) -> dict:
+    """Enterprise-friendly completeness scoring."""
+    fields = {
+        "title": not _is_blank(ss.get("decision_title", "")),
+        "context": not _is_blank(ss.get("decision_context", "")),
+        "owner": not _is_blank(ss.get("decision_owner", "")),
+        "responsibility": bool(ss.get("responsibility_confirmed", False)),
+        "stakeholders": not _is_blank(ss.get("stakeholders_text", "")),
+        "assumptions": not _is_blank(ss.get("assumptions_text", "")),
+        "unknowns": not _is_blank(ss.get("unknowns_text", "")),
+        "review_date": bool(ss.get("review_date", None)),
+    }
+    total = len(fields)
+    done = sum(1 for v in fields.values() if v)
+    pct = int((done / total) * 100)
+    missing = [k for k, v in fields.items() if not v]
+    return {"pct": pct, "done": done, "total": total, "missing": missing, "fields": fields}
+
+def context_quality_hints(title: str, context: str) -> list:
+    """Rule-based 'AI assist' hints (no LLM)."""
+    hints = []
+    t = (title or "").strip()
+    c = (context or "").strip()
+
+    if len(t) < 10:
+        hints.append("Title is very short. Make it specific (what + for whom + when).")
+    if len(c) < 40:
+        hints.append("Context is too short. Add: why now, constraints (budget/time), and success criteria.")
+    if "because" not in c.lower() and "due to" not in c.lower() and "why" not in c.lower():
+        hints.append("Add a 'why now' reason (because/due to/why).")
+    if "success" not in c.lower() and "metric" not in c.lower() and "kpi" not in c.lower():
+        hints.append("Add success criteria (metric/KPI) so learning is measurable.")
+    return hints
+
+def suggested_stakeholders(decision_type: str) -> list:
+    base = ["Finance", "Operations", "Legal/Compliance", "IT/Security"]
+    by_type = {
+        "Strategic": ["CEO/Founder", "Product", "Sales", "Finance"],
+        "Financial": ["Finance", "Legal/Compliance"],
+        "Hiring": ["HR", "Hiring Manager", "Finance"],
+        "Operational": ["Operations", "IT/Security"],
+        "Personal": ["Trusted Advisor"],
+    }
+    out = []
+    out.extend(by_type.get(decision_type, []))
+    for x in base:
+        if x not in out:
+            out.append(x)
+    return out[:6]
 def get_all_templates():
     custom = load_custom_templates()
     merged = dict(TEMPLATES)
@@ -649,6 +701,7 @@ def page_template_builder():
 def page_home():
     # ---------- Executive header ----------
     head_l, head_r = st.columns([0.72, 0.28], vertical_alignment="center")
+    guided = st.toggle("Guided mode (recommended)", value=True)
     with head_l:
         st.title("DecisionOS")
         st.caption("Explainable • Auditable • Governance-First Decision Intelligence for High-Stakes Decisions")
@@ -694,8 +747,26 @@ def page_home():
                 )
                 rule = ALL_TEMPLATES[template_key]
 
-                title = st.text_input("Decision title (short)", value="", key="decision_title")
-                context = st.text_area("Decision context (1–3 lines)", value="", key="decision_context")
+            title = st.text_input(
+              "Decision title (short)",
+              value="",
+              key="decision_title",
+              placeholder="e.g., Approve Vendor X for SOC2 audit • Decide Q2 budget • Hire 2 engineers • Upgrade servers"
+            )
+
+            context = st.text_area(
+              "Decision context (1–3 lines)",
+              value="",
+              key="decision_context",
+              placeholder="Include: why now, constraints (budget/time/compliance), success criteria (KPI)."
+            )
+
+            if guided:
+              hints = context_quality_hints(title, context)
+              if hints:
+               st.info("AI Assist — improve decision clarity:")
+               for h in hints[:3]:
+                st.write(f"• {h}")
 
             # ----------------------------
             # TAB 2: Governance
@@ -711,28 +782,55 @@ def page_home():
                     key="responsibility_confirmed",
                 )
 
-                stakeholders_text = st.text_area(
-                    "Stakeholders (one per line)",
-                    value="",
-                    help="People who were involved, consulted, or need to be informed.",
-                    key="stakeholders_text",
-                )
-                stakeholders = [x.strip() for x in stakeholders_text.splitlines() if x.strip()]
+            stakeholders_text = st.text_area(
+                "Stakeholders (one per line)",
+                value="",
+                help="People who were involved, consulted, or need to be informed.",
+                key="stakeholders_text",
+            )
 
-                review_date = st.date_input(
-                    "Review date (when should we revisit this decision?)",
-                    value=None,
-                    key="review_date",
-                )
+            # Decision type/class must be defined BEFORE we compute suggestions
+            c1, c2 = st.columns(2)
+            with c1:
+              decision_type = st.selectbox(
+              "Decision type",
+              ["Strategic", "Financial", "Hiring", "Operational", "Personal"],
+              key="decision_type",
+              )
+            with c2:
+              decision_class = st.selectbox(
+              "Decision class (reversibility)",
+              ["One-way", "Two-way", "Experimental"],
+              index=1,
+               help="One-way is hard to reverse and requires higher scrutiny. Two-way is reversible. Experimental is a controlled trial.",
+               key="decision_class",
+            )
 
-                c1, c2 = st.columns(2)
-                with c1:
+            # Suggestion button MUST be st.form_submit_button (because you are inside st.form)
+            if guided:
+             sugg = suggested_stakeholders(st.session_state.get("decision_type", "Strategic"))
+             if st.form_submit_button("Add suggested stakeholder roles", use_container_width=True):
+              existing = (st.session_state.get("stakeholders_text", "") or "").strip()
+              merged = (existing + "\n" if existing else "") + "\n".join(sugg)
+              st.session_state["stakeholders_text"] = merged
+              st.rerun()
+
+            stakeholders = [x.strip() for x in stakeholders_text.splitlines() if x.strip()]
+
+            review_date = st.date_input(
+              "Review date (when should we revisit this decision?)",
+              value=None,
+              key="review_date",
+            )
+
+            c1, c2 = st.columns(2)
+            with c1:
                     decision_type = st.selectbox(
                         "Decision type",
                         ["Strategic", "Financial", "Hiring", "Operational", "Personal"],
                         key="decision_type",
                     )
-                with c2:
+            with c2:
                     decision_class = st.selectbox(
                         "Decision class (reversibility)",
                         ["One-way", "Two-way", "Experimental"],
@@ -765,8 +863,23 @@ def page_home():
                 section_title("Assumptions & unknowns", "Captured for auditability and later learning.")
                 st.caption("Write one item per line. These are saved for reports and history.")
 
-                assumptions_text = st.text_area("Assumptions (one per line)", value="", key="assumptions_text")
-                unknowns_text = st.text_area("Unknowns / Risks (one per line)", value="", key="unknowns_text")
+                assumptions_text = st.text_area(
+                  "Assumptions (one per line)",
+                  value="",
+                  key="assumptions_text",
+                  placeholder="e.g.\n- Customers will adopt within 30 days\n- Vendor SLA supports enterprise use\n- Team capacity exists"
+                )
+
+                unknowns_text = st.text_area(
+                  "Unknowns / Risks (one per line)",
+                  value="",
+                  key="unknowns_text",
+                  placeholder="e.g.\n- Legal approval may delay launch\n- Security posture unknown\n- Cost may exceed budget"
+                )
+
+                if guided:
+                  with st.expander("What should I write here?"):
+                   st.write("**Assumptions** = what you believe is true. **Unknowns/Risks** = missing info or threats that could change the decision.")
 
                 assumptions = [x.strip() for x in assumptions_text.splitlines() if x.strip()]
                 unknowns = [x.strip() for x in unknowns_text.splitlines() if x.strip()]
@@ -905,10 +1018,10 @@ def page_home():
                 )
 
                 if readiness.status == "BLOCK":
-                    st.error("Evaluation blocked by governance readiness. Fix blockers/issues in the Review tab.")
-                    st.session_state.last_record = None
-                    st.session_state.last_playbook = None
-                return
+                 st.error("Evaluation blocked by governance readiness. Fix blockers/issues in the Review tab.")
+                 st.session_state.last_record = None
+                 st.session_state.last_playbook = None
+                 st.stop()   # or return, but ONLY inside the if
 
                 # Run engine (same as your old logic)
                 final_score = compute_weighted_score(rule, scores)
@@ -990,6 +1103,13 @@ def page_home():
         st.write("**Owner:**", (st.session_state.get("decision_owner", "") or "").strip() or "—")
         st.write("**Type:**", st.session_state.get("decision_type", "—"))
         st.write("**Class:**", st.session_state.get("decision_class", "—"))
+
+        comp = compute_completeness(st.session_state)
+        st.progress(comp["pct"] / 100, text=f"Completeness: {comp['pct']}% ({comp['done']}/{comp['total']})")
+
+        if guided and comp["missing"]:
+          st.caption("Missing essentials:")
+          st.write("• " + "\n• ".join(comp["missing"][:5]))
 
         st.divider()
 
@@ -1085,8 +1205,8 @@ def page_home():
 # ----------------------------
 # Main app shell
 # ----------------------------
-st.title("DecisionOS — Decision Intelligence (MVP)")
-st.caption("Explainable, auditable decision templates for any business.")
+# (Title is rendered inside pages)
+st.caption("DecisionOS — Explainable decision intelligence for any business.")
 
 page = st.sidebar.radio("Navigate", ["Home", "History", "Dashboard", "Template Builder", "About"], key="nav")
 
