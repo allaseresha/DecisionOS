@@ -1,4 +1,5 @@
 import os
+import datetime as dt
 import streamlit as st
 
 # Must be first Streamlit call
@@ -54,6 +55,10 @@ if "migration_summary" not in st.session_state:
 if "last_playbook" not in st.session_state:
     st.session_state.last_playbook = None
 
+# Demo mode (read-only demo decision)
+if "demo_mode" not in st.session_state:
+    st.session_state.demo_mode = False
+
 # Ensure these exist so we can safely update them BEFORE widgets render
 if "stakeholders_text" not in st.session_state:
     st.session_state["stakeholders_text"] = ""
@@ -61,6 +66,10 @@ if "assumptions_text" not in st.session_state:
     st.session_state["assumptions_text"] = ""
 if "unknowns_text" not in st.session_state:
     st.session_state["unknowns_text"] = ""
+if "assumptions_notes" not in st.session_state:
+    st.session_state["assumptions_notes"] = ""
+if "unknowns_notes" not in st.session_state:
+    st.session_state["unknowns_notes"] = ""
 
 # ----------------------------
 # Enterprise UI styling
@@ -73,6 +82,21 @@ st.markdown(
 div[data-testid="stSidebar"] { padding-top: 1rem; }
 h1, h2, h3 { letter-spacing: -0.02em; }
 small, .stCaption { color: rgba(0,0,0,0.62) !important; }
+
+/* preset buttons row */
+.preset-wrap { margin-top: 0.25rem; margin-bottom: 0.75rem; }
+
+/* executive card feel */
+.exec-card {
+  padding: 1rem 1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(0,0,0,0.08);
+  background: rgba(255,255,255,0.75);
+}
+.exec-title { font-weight: 800; font-size: 1.1rem; margin-bottom: 0.25rem; }
+.exec-sub { color: rgba(0,0,0,0.70); margin-bottom: 0.65rem; }
+.exec-kv { margin: 0.2rem 0; }
+.exec-list { margin: 0.25rem 0 0 1.1rem; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -236,6 +260,446 @@ def _clamp_0_10(x: float) -> float:
     return max(0.0, min(10.0, float(x)))
 
 
+def build_validity_contract(assumptions: list, unknowns: list, review_date, decision_class: str):
+    """
+    Decision validity contract:
+    - This is NOT legal advice. It's a practical enterprise pattern:
+      "Our recommendation is valid if X remains true; re-evaluate if Y changes."
+    """
+    valid_if = []
+    for a in (assumptions or [])[:6]:
+        if a.strip():
+            valid_if.append(a.strip())
+
+    invalidates_if = []
+    for u in (unknowns or [])[:6]:
+        if u.strip():
+            invalidates_if.append(u.strip())
+
+    # Enterprise-friendly generic triggers (not speculative, but governance-accurate)
+    invalidates_if.extend(
+        [
+            "A material change occurs in budget, timeline, or compliance constraints",
+            "New stakeholder constraints emerge that were not consulted during evaluation",
+        ]
+    )
+
+    # Review cadence guidance (simple)
+    cadence = "Revisit within 30 days" if decision_class == "Experimental" else "Revisit at the set review date"
+    review_on = str(review_date) if review_date else ""
+
+    return {
+        "valid_if": valid_if,
+        "invalidates_if": invalidates_if,
+        "review_on": review_on,
+        "cadence": cadence,
+    }
+
+
+def build_executive_recommendation(outcome: str, final_score: float, confidence: str, readiness, explanation: dict, playbook: dict, sst: dict):
+    """
+    Executive-grade recommendation language:
+    - One clear headline
+    - Short rationale: top positives + top negatives
+    - Next steps: 72 hours / 7 days
+    - Risk flags + conditions
+    """
+    if outcome == "GO":
+        headline = "Recommendation: Proceed (GO)"
+        tone = "good"
+        summary = "Approve and execute with clear owners, milestones, and risk controls."
+    elif outcome == "REVIEW":
+        headline = "Recommendation: Proceed with revisions (REVIEW)"
+        tone = "warn"
+        summary = "Move forward only after addressing the key blockers and tightening assumptions."
+    else:
+        headline = "Recommendation: Do not proceed (NO-GO)"
+        tone = "bad"
+        summary = "Stop or redesign the decision. Current risk / feasibility profile is not acceptable."
+
+    pos = [x for x in (explanation or {}).get("top_positive_contributors", [])][:3]
+    neg = [x for x in (explanation or {}).get("top_negative_contributors", [])][:3]
+
+    rationale_pos = [f"{p.get('dimension')}: strong signal ({p.get('weighted')})" for p in pos if p.get("dimension")]
+    rationale_neg = [f"{n.get('dimension')}: drag / risk ({n.get('weighted')})" for n in neg if n.get("dimension")]
+
+    actions = (playbook or {}).get("actions", [])[:3]
+    next_steps_7d = []
+    for a in actions:
+        dim = a.get("dimension")
+        steps = a.get("recommended_actions", [])[:2]
+        if dim and steps:
+            next_steps_7d.append(f"{dim}: {steps[0]}")
+
+    flags = (playbook or {}).get("flags", [])
+    spread = (sst or {}).get("spread", None)
+
+    return {
+        "headline": headline,
+        "tone": tone,
+        "summary": summary,
+        "score_line": f"Final score: {final_score} / 10 • Confidence: {confidence} • Readiness: {getattr(readiness,'score', '—')}% ({getattr(readiness,'status','—')})",
+        "rationale_positive": rationale_pos,
+        "rationale_negative": rationale_neg,
+        "next_steps_7d": next_steps_7d,
+        "risk_flags": flags[:6] if flags else [],
+        "stress_note": f"Scenario spread (Best–Worst): {spread}" if spread is not None else "",
+    }
+
+
+def render_executive_recommendation(exec_rec: dict):
+    if not exec_rec:
+        return
+    st.markdown(
+        f"""
+<div class="exec-card">
+  <div class="exec-title">{exec_rec.get('headline','')}</div>
+  <div class="exec-sub">{exec_rec.get('summary','')}</div>
+  <div class="exec-kv"><b>{exec_rec.get('score_line','')}</b></div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Why this recommendation**")
+        if exec_rec.get("rationale_positive"):
+            st.markdown("**Strengths**")
+            for x in exec_rec["rationale_positive"]:
+                st.write(f"- {x}")
+        if exec_rec.get("rationale_negative"):
+            st.markdown("**Risks / gaps**")
+            for x in exec_rec["rationale_negative"]:
+                st.write(f"- {x}")
+
+    with c2:
+        st.markdown("**Next actions (7 days)**")
+        if exec_rec.get("next_steps_7d"):
+            for x in exec_rec["next_steps_7d"]:
+                st.write(f"- {x}")
+        else:
+            st.caption("No next steps generated.")
+
+        if exec_rec.get("risk_flags"):
+            st.markdown("**Risk flags**")
+            for f in exec_rec["risk_flags"]:
+                st.write(f"- {f}")
+
+        if exec_rec.get("stress_note"):
+            st.caption(exec_rec.get("stress_note"))
+
+
+def render_validity_contract(vc: dict):
+    if not vc:
+        return
+    st.subheader("Decision Validity Contract")
+    st.caption("This recommendation stays valid only while the conditions below remain true. Re-evaluate if they change.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Valid if**")
+        if vc.get("valid_if"):
+            for x in vc["valid_if"]:
+                st.write(f"- {x}")
+        else:
+            st.caption("No assumptions captured yet.")
+    with c2:
+        st.markdown("**Re-evaluate immediately if**")
+        if vc.get("invalidates_if"):
+            for x in vc["invalidates_if"]:
+                st.write(f"- {x}")
+        else:
+            st.caption("No risks captured yet.")
+    if vc.get("review_on"):
+        st.caption(f"Planned review date: {vc.get('review_on')}")
+    if vc.get("cadence"):
+        st.caption(f"Cadence guidance: {vc.get('cadence')}")
+
+
+def _today_plus(days: int) -> dt.date:
+    return dt.date.today() + dt.timedelta(days=days)
+
+
+def apply_preset(preset_key: str, template_default_key: str, rule):
+    """
+    Presets set:
+    - Title / Context
+    - Governance defaults
+    - Assumptions / Unknowns
+    - Suggested stakeholders
+    - (Optionally) score defaults by dimension
+    """
+    st.session_state["tpl_select"] = template_default_key
+
+    # common governance defaults
+    st.session_state.setdefault("decision_owner", "")
+    st.session_state["responsibility_confirmed"] = False
+    st.session_state["review_date"] = _today_plus(30)
+
+    if preset_key == "hire":
+        st.session_state.update(
+            {
+                "decision_title": "Should we hire now or wait? (Next 90 days)",
+                "decision_context": "We are deciding whether hiring now will accelerate execution without creating cashflow or productivity risk. Success criteria: measurable delivery speed improvement while maintaining costs within budget.",
+                "decision_type": "Hiring",
+                "decision_class": "One-way",
+                "stakeholders_text": "Hiring Manager\nFinance\nHR\nOperations",
+                "assumptions_text": "Workload will remain high for the next 3 months\nWe can attract qualified candidates within our salary range\nThe role directly improves delivery speed",
+                "unknowns_text": "Time-to-productivity (ramp-up)\nRisk of mis-hire\nImpact on current team bandwidth during onboarding",
+            }
+        )
+
+    elif preset_key == "marketing":
+        st.session_state.update(
+            {
+                "decision_title": "Should we increase ad spend or cut it this month?",
+                "decision_context": "We are deciding whether to scale marketing spend based on efficiency and lead quality. Success criteria: lower CAC or higher qualified conversions while staying within the monthly budget.",
+                "decision_type": "Financial",
+                "decision_class": "Experimental",
+                "stakeholders_text": "Marketing\nSales\nFinance\nOperations",
+                "assumptions_text": "Tracking and attribution is reliable enough for decisions\nLead quality remains stable at higher spend\nSales can handle additional demand",
+                "unknowns_text": "Diminishing returns at scale\nConversion rate volatility\nLag between spend and revenue realization",
+            }
+        )
+
+    elif preset_key == "vendor":
+        st.session_state.update(
+            {
+                "decision_title": "Should we switch vendors / tools now?",
+                "decision_context": "We are deciding whether switching vendors improves reliability, compliance, and cost. Success criteria: lower total cost of ownership or better uptime/support without operational disruption.",
+                "decision_type": "Operational",
+                "decision_class": "Two-way",
+                "stakeholders_text": "Operations\nIT/Security\nFinance\nLegal/Compliance",
+                "assumptions_text": "New vendor meets our functional requirements\nMigration effort is manageable within our timeline\nSupport and SLA are stronger than current vendor",
+                "unknowns_text": "Hidden switching costs\nDowntime / disruption during migration\nContractual penalties or termination clauses",
+            }
+        )
+
+    elif preset_key == "expansion":
+        st.session_state.update(
+            {
+                "decision_title": "Should we open a new branch / enter a new market?",
+                "decision_context": "We are deciding whether expansion is justified by demand and operational readiness. Success criteria: new location/market reaches break-even within a defined period without harming existing operations.",
+                "decision_type": "Strategic",
+                "decision_class": "One-way",
+                "stakeholders_text": "CEO/Founder\nOperations\nFinance\nSales",
+                "assumptions_text": "Demand exists in the target market\nWe can recruit/operate locally within plan\nOperating model can scale without quality loss",
+                "unknowns_text": "Local competitor response\nRegulatory/permit delays\nHigher-than-expected operating costs",
+            }
+        )
+
+    elif preset_key == "pricing":
+        st.session_state.update(
+            {
+                "decision_title": "Should we raise prices now?",
+                "decision_context": "We are deciding whether raising prices improves margin without unacceptable churn. Success criteria: improved profitability while maintaining retention and conversion rates within acceptable limits.",
+                "decision_type": "Strategic",
+                "decision_class": "Experimental",
+                "stakeholders_text": "Sales\nFinance\nProduct\nCustomer Success",
+                "assumptions_text": "Customers perceive strong enough value at higher price\nCompetitors will not undercut aggressively\nWe can communicate the change clearly",
+                "unknowns_text": "Price sensitivity by segment\nChurn risk\nImpact on new customer acquisition conversion",
+            }
+        )
+
+    # Default scoring per dimension (safe heuristic)
+    for dim in rule.dimensions:
+        key = f"score_{dim}"
+        if key not in st.session_state:
+            st.session_state[key] = 6.0
+
+        # a gentle bias for common business dimensions if they exist
+        d = dim.lower()
+        if "value" in d or "impact" in d:
+            st.session_state[key] = 7.0
+        elif "feasib" in d or "execution" in d:
+            st.session_state[key] = 6.5
+        elif "risk" in d or "compliance" in d:
+            st.session_state[key] = 6.0
+        elif "urgency" in d or "timing" in d:
+            st.session_state[key] = 6.5
+
+    st.session_state.demo_mode = False
+    st.success("Preset applied. Go through the tabs and refine details.")
+    st.rerun()
+
+
+def load_demo_decision(template_default_key: str, rule):
+    """
+    Read-only demo:
+    - Populates fields
+    - Runs evaluation immediately
+    - Does NOT write to history
+    - Locks form widgets
+    """
+    st.session_state["tpl_select"] = template_default_key
+    st.session_state.demo_mode = True
+
+    st.session_state.update(
+        {
+            "decision_title": "DEMO: Should we raise prices by 8% on our top 3 packages?",
+            "decision_context": "We suspect our pricing is below market for the value delivered. This demo shows how DecisionOS structures the decision and produces an auditable recommendation. Success criteria: improve margin while keeping churn acceptable.",
+            "decision_owner": "Owner (Demo)",
+            "responsibility_confirmed": True,
+            "decision_type": "Strategic",
+            "decision_class": "Experimental",
+            "stakeholders_text": "Sales\nFinance\nProduct\nCustomer Success",
+            "assumptions_text": "Our differentiation remains strong\nWe can justify the price change with clear messaging\nCompetitor pricing is not significantly lower",
+            "unknowns_text": "Churn impact on existing customers\nConversion rate impact on new customers\nCompetitive reaction timing",
+            "assumptions_notes": "",
+            "unknowns_notes": "",
+            "review_date": _today_plus(21),
+            "best_delta": 1.0,
+            "expected_delta": 0.0,
+            "worst_delta": -2.0,
+        }
+    )
+
+    # score defaults for demo
+    for dim in rule.dimensions:
+        k = f"score_{dim}"
+        d = dim.lower()
+        if "value" in d or "impact" in d:
+            st.session_state[k] = 7.5
+        elif "feasib" in d or "execution" in d:
+            st.session_state[k] = 6.5
+        elif "risk" in d or "compliance" in d:
+            st.session_state[k] = 5.5
+        elif "urgency" in d or "timing" in d:
+            st.session_state[k] = 6.0
+        else:
+            st.session_state[k] = 6.0
+
+    # Run evaluation immediately (no save)
+    stakeholders = [x.strip() for x in (st.session_state.get("stakeholders_text", "") or "").splitlines() if x.strip()]
+    assumptions = [x.strip() for x in (st.session_state.get("assumptions_text", "") or "").splitlines() if x.strip()]
+    unknowns = [x.strip() for x in (st.session_state.get("unknowns_text", "") or "").splitlines() if x.strip()]
+
+    scores = {dim: float(st.session_state.get(f"score_{dim}", 6.0)) for dim in rule.dimensions}
+    final_score = compute_weighted_score(rule, scores)
+    outcome = determine_outcome(rule, final_score)
+    confidence = confidence_band(final_score)
+    explanation = explain_decision(rule, scores)
+    playbook = build_playbook(rule, scores, final_score, outcome, explanation)
+
+    readiness = calculate_decision_readiness(
+        {
+            "owner": (st.session_state.get("decision_owner", "") or "").strip(),
+            "decision_type": st.session_state.get("decision_type"),
+            "decision_class": st.session_state.get("decision_class"),
+            "stakeholders": stakeholders,
+            "assumptions": assumptions,
+            "risks": unknowns,
+            "confidence": confidence,
+            "weights": rule.weights,
+            "responsibility_confirmed": bool(st.session_state.get("responsibility_confirmed", False)),
+        }
+    )
+
+    best_delta = float(st.session_state.get("best_delta", 1.0))
+    expected_delta = float(st.session_state.get("expected_delta", 0.0))
+    worst_delta = float(st.session_state.get("worst_delta", -2.0))
+
+    expected_score = _clamp_0_10(final_score + expected_delta)
+    best_score = _clamp_0_10(final_score + best_delta)
+    worst_score = _clamp_0_10(final_score + worst_delta)
+
+    scenario_results = {
+        "expected": {
+            "score": expected_score,
+            "outcome": determine_outcome(rule, expected_score),
+            "confidence": confidence_band(expected_score),
+        },
+        "best": {
+            "score": best_score,
+            "outcome": determine_outcome(rule, best_score),
+            "confidence": confidence_band(best_score),
+        },
+        "worst": {
+            "score": worst_score,
+            "outcome": determine_outcome(rule, worst_score),
+            "confidence": confidence_band(worst_score),
+        },
+    }
+    scenario_stress_test = {
+        "expected_delta": float(expected_delta),
+        "best_delta": float(best_delta),
+        "worst_delta": float(worst_delta),
+        "results": scenario_results,
+        "spread": round(best_score - worst_score, 2),
+    }
+
+    validity_contract = build_validity_contract(
+        assumptions=assumptions,
+        unknowns=unknowns,
+        review_date=st.session_state.get("review_date", None),
+        decision_class=st.session_state.get("decision_class", ""),
+    )
+
+    exec_rec = build_executive_recommendation(
+        outcome=outcome,
+        final_score=final_score,
+        confidence=confidence,
+        readiness=readiness,
+        explanation=explanation,
+        playbook=playbook,
+        sst=scenario_stress_test,
+    )
+
+    demo_record = {
+        "decision_id": "DEMO",
+        "timestamp_utc": now_iso(),
+        "schema_version": 2,
+        "template_id": rule.template_id,
+        "template_name": rule.template_name,
+        "title": st.session_state.get("decision_title", ""),
+        "context": st.session_state.get("decision_context", ""),
+        "decision_type": st.session_state.get("decision_type", ""),
+        "decision_class": st.session_state.get("decision_class", ""),
+        "engine_version": ENGINE_VERSION,
+        "ruleset_version": RULESET_VERSION,
+        "decision_owner": st.session_state.get("decision_owner", ""),
+        "stakeholders": stakeholders,
+        "review_date": str(st.session_state.get("review_date")) if st.session_state.get("review_date") else "",
+        "assumptions": assumptions,
+        "unknowns": unknowns,
+        "assumptions_notes": st.session_state.get("assumptions_notes", ""),
+        "unknowns_notes": st.session_state.get("unknowns_notes", ""),
+        "scores": scores,
+        "final_score": final_score,
+        "scenario_stress_test": scenario_stress_test,
+        "outcome": outcome,
+        "confidence": confidence,
+        "explanation": explanation,
+        "playbook": playbook,
+        "parent_id": None,
+        "version": 1,
+        "readiness_score": readiness.score,
+        "readiness_status": readiness.status,
+        "readiness_min_required": readiness.min_required,
+        "readiness_blockers": readiness.blockers,
+        "readiness_issues": readiness.issues,
+        "responsibility_confirmed": bool(st.session_state.get("responsibility_confirmed", False)),
+        "is_demo": True,
+        "validity_contract": validity_contract,
+        "executive_recommendation": exec_rec,
+    }
+
+    st.session_state.last_record = demo_record
+    st.session_state.last_playbook = playbook
+    st.success("Demo loaded (read-only). Scroll down to see the executive output.")
+    st.rerun()
+
+
+def exit_demo_mode():
+    st.session_state.demo_mode = False
+    # keep fields (so user can continue), but unlock
+    if st.session_state.last_record and st.session_state.last_record.get("is_demo"):
+        st.session_state.last_record = None
+        st.session_state.last_playbook = None
+    st.success("Demo mode disabled. You can now edit and save decisions.")
+    st.rerun()
+
+
 # ----------------------------
 # Pages
 # ----------------------------
@@ -248,6 +712,8 @@ DecisionOS helps teams make decisions using:
 - Transparent rules
 - Explainability (why the outcome happened)
 - Audit trail (history)
+- Executive-grade recommendations (what to do next + why)
+- Decision validity contract (when this advice stays valid)
 
 This MVP focuses on clarity, governance, and repeatability.
         """
@@ -323,6 +789,17 @@ def page_history():
             st.write("**Ruleset version:**", r.get("ruleset_version", "—"))
             st.write("**Decision Type:**", r.get("decision_type", "—"))
             st.write("**Decision Class:**", r.get("decision_class", "—"))
+
+            # Executive recommendation (new)
+            if r.get("executive_recommendation"):
+                st.markdown("---")
+                st.subheader("Executive Recommendation")
+                render_executive_recommendation(r.get("executive_recommendation") or {})
+
+            # Validity contract (new)
+            if r.get("validity_contract"):
+                st.markdown("---")
+                render_validity_contract(r.get("validity_contract") or {})
 
             st.markdown("---")
             st.subheader("Ownership & Governance")
@@ -593,6 +1070,7 @@ def page_dashboard():
             }
         )
 
+    import pandas as pd
     df = pd.DataFrame(flat)
     st.download_button(
         "Download CSV (filtered)",
@@ -680,10 +1158,48 @@ def page_home():
         st.write("")
         badge(f"Ruleset {RULESET_VERSION}", "info")
 
+    ALL_TEMPLATES = get_all_templates()
+    template_default_key = st.session_state.get("tpl_select", list(ALL_TEMPLATES.keys())[0])
+    rule_default = ALL_TEMPLATES.get(template_default_key, list(ALL_TEMPLATES.values())[0])
+
+    # ----------------------------
+    # Decision Presets + Demo (NEW)
+    # ----------------------------
+    st.markdown("### What decision are you making right now?")
+    st.caption("Click a preset to pre-fill the decision in a way business owners understand instantly.")
+
+    p1, p2, p3, p4, p5, p6 = st.columns([1, 1, 1, 1, 1, 1])
+    with p1:
+        if st.button("🧑‍💼 Hire now / wait", use_container_width=True):
+            apply_preset("hire", template_default_key, rule_default)
+    with p2:
+        if st.button("📢 Increase / cut ads", use_container_width=True):
+            apply_preset("marketing", template_default_key, rule_default)
+    with p3:
+        if st.button("🔄 Switch vendor", use_container_width=True):
+            apply_preset("vendor", template_default_key, rule_default)
+    with p4:
+        if st.button("🏢 Open new branch", use_container_width=True):
+            apply_preset("expansion", template_default_key, rule_default)
+    with p5:
+        if st.button("💰 Raise prices", use_container_width=True):
+            apply_preset("pricing", template_default_key, rule_default)
+    with p6:
+        if not st.session_state.demo_mode:
+            if st.button("🎯 Try Demo (read-only)", use_container_width=True):
+                load_demo_decision(template_default_key, rule_default)
+        else:
+            if st.button("Exit Demo", use_container_width=True):
+                exit_demo_mode()
+
+    if st.session_state.demo_mode:
+        st.info("Demo mode is ON (read-only). You can review the output, but saving is disabled.")
+
     st.divider()
 
-    ALL_TEMPLATES = get_all_templates()
     form_col, summary_col = st.columns([0.66, 0.34], gap="large")
+
+    demo_lock = bool(st.session_state.get("demo_mode", False))
 
     # ----------------------------
     # LEFT: Form
@@ -701,21 +1217,27 @@ def page_home():
                     options=list(ALL_TEMPLATES.keys()),
                     format_func=lambda k: ALL_TEMPLATES[k].template_name,
                     key="tpl_select",
+                    disabled=demo_lock,
                 )
 
                 st.text_input(
                     "Decision title",
                     key="decision_title",
-                    placeholder="e.g., Approve Vendor X for SOC2 • Decide Q2 budget • Hire 2 engineers • Upgrade servers",
+                    placeholder="e.g., Should we raise prices? Should we hire? Should we open a branch?",
+                    disabled=demo_lock,
                 )
                 st.text_area(
                     "Decision context (1–3 lines)",
                     key="decision_context",
-                    placeholder="Include: why now, constraints (budget/time/compliance), success criteria (KPI).",
+                    placeholder="Include: why now, constraints, success criteria (KPI).",
+                    disabled=demo_lock,
                 )
 
                 if guided:
-                    hints = context_quality_hints(st.session_state.get("decision_title", ""), st.session_state.get("decision_context", ""))
+                    hints = context_quality_hints(
+                        st.session_state.get("decision_title", ""),
+                        st.session_state.get("decision_context", ""),
+                    )
                     if hints:
                         st.info("AI Assist — improve decision clarity:")
                         for h in hints[:3]:
@@ -728,13 +1250,15 @@ def page_home():
                 st.text_input(
                     "Decision owner (accountable person / role)",
                     key="decision_owner",
-                    placeholder="e.g., Head of Operations / CFO / Founder / Product Lead",
+                    placeholder="e.g., Founder / CEO / Head of Ops / CFO",
+                    disabled=demo_lock,
                 )
 
                 st.checkbox(
                     "I confirm I am accountable for this decision and accept ownership of the outcome.",
                     help="Governance readiness can block evaluation if accountability is missing.",
                     key="responsibility_confirmed",
+                    disabled=demo_lock,
                 )
 
                 c1, c2 = st.columns(2)
@@ -743,6 +1267,7 @@ def page_home():
                         "Decision type",
                         ["Strategic", "Financial", "Hiring", "Operational", "Personal"],
                         key="decision_type",
+                        disabled=demo_lock,
                     )
                 with c2:
                     st.selectbox(
@@ -751,13 +1276,15 @@ def page_home():
                         index=1,
                         help="One-way = hard to reverse (higher scrutiny). Two-way = reversible. Experimental = controlled trial.",
                         key="decision_class",
+                        disabled=demo_lock,
                     )
 
-                # ✅ IMPORTANT FIX: Button BEFORE the stakeholders widget
+                # Button BEFORE the stakeholders widget (important for session_state updates)
                 add_roles = st.form_submit_button(
                     "Add suggested stakeholder roles",
                     use_container_width=True,
                     key="btn_add_stakeholder_roles",
+                    disabled=demo_lock,
                 )
                 if add_roles:
                     dtype = st.session_state.get("decision_type", "Strategic")
@@ -771,13 +1298,15 @@ def page_home():
                     "Stakeholders (one per line)",
                     help="Who was consulted / impacted / must be informed (roles are ok).",
                     key="stakeholders_text",
-                    placeholder="e.g.\nSecurity\nFinance\nLegal\nEngineering\nSales",
+                    placeholder="e.g.\nSales\nFinance\nOperations\nLegal/Compliance",
+                    disabled=demo_lock,
                 )
 
                 st.date_input(
                     "Review date (when should we revisit this decision?)",
                     value=st.session_state.get("review_date", None),
                     key="review_date",
+                    disabled=demo_lock,
                 )
 
             # TAB 3: Scoring
@@ -787,7 +1316,15 @@ def page_home():
 
                 rule = ALL_TEMPLATES[st.session_state.get("tpl_select", list(ALL_TEMPLATES.keys())[0])]
                 for dim in rule.dimensions:
-                    st.slider(dim, min_value=0.0, max_value=10.0, value=5.0, step=0.5, key=f"score_{dim}")
+                    st.slider(
+                        dim,
+                        min_value=0.0,
+                        max_value=10.0,
+                        value=float(st.session_state.get(f"score_{dim}", 5.0)),
+                        step=0.5,
+                        key=f"score_{dim}",
+                        disabled=demo_lock,
+                    )
 
             # TAB 4: Assumptions
             with tabs[3]:
@@ -795,32 +1332,52 @@ def page_home():
                 st.text_area(
                     "Assumptions (one per line)",
                     key="assumptions_text",
-                    placeholder="e.g.\n- Vendor SLA supports enterprise use\n- Team capacity exists\n- Customers adopt within 30 days",
+                    placeholder="e.g.\nWe can deliver within budget\nCustomers will accept the change\nWe have capacity to execute",
+                    disabled=demo_lock,
                 )
                 st.text_area(
                     "Unknowns / Risks (one per line)",
                     key="unknowns_text",
-                    placeholder="e.g.\n- Security posture unknown\n- Legal approval may delay\n- Cost may exceed budget",
+                    placeholder="e.g.\nChurn risk\nExecution delays\nCompliance issues",
+                    disabled=demo_lock,
                 )
                 if guided:
                     with st.expander("What should I write here?"):
                         st.write("**Assumptions** = what you believe is true. **Unknowns/Risks** = missing info or threats.")
 
-                st.text_area("Assumptions Notes (optional)", key="assumptions_notes")
-                st.text_area("Unknowns Notes (optional)", key="unknowns_notes")
+                st.text_area("Assumptions Notes (optional)", key="assumptions_notes", disabled=demo_lock)
+                st.text_area("Unknowns Notes (optional)", key="unknowns_notes", disabled=demo_lock)
 
             # TAB 5: Stress Test
             with tabs[4]:
                 section_title("Scenario stress testing", "Simulate best/expected/worst outcomes.")
                 cS1, cS2, cS3 = st.columns(3)
                 with cS1:
-                    st.number_input("Best-case delta (+)", value=float(st.session_state.get("best_delta", 1.0)), step=0.5, key="best_delta")
+                    st.number_input(
+                        "Best-case delta (+)",
+                        value=float(st.session_state.get("best_delta", 1.0)),
+                        step=0.5,
+                        key="best_delta",
+                        disabled=demo_lock,
+                    )
                 with cS2:
-                    st.number_input("Expected delta", value=float(st.session_state.get("expected_delta", 0.0)), step=0.5, key="expected_delta")
+                    st.number_input(
+                        "Expected delta",
+                        value=float(st.session_state.get("expected_delta", 0.0)),
+                        step=0.5,
+                        key="expected_delta",
+                        disabled=demo_lock,
+                    )
                 with cS3:
-                    st.number_input("Worst-case delta (-)", value=float(st.session_state.get("worst_delta", -2.0)), step=0.5, key="worst_delta")
+                    st.number_input(
+                        "Worst-case delta (-)",
+                        value=float(st.session_state.get("worst_delta", -2.0)),
+                        step=0.5,
+                        key="worst_delta",
+                        disabled=demo_lock,
+                    )
 
-            # TAB 6: Review (✅ FINALIZE BUTTON IS ONLY HERE)
+            # TAB 6: Review (Finalize button only here)
             with tabs[5]:
                 section_title("Readiness review", "Governance gate before evaluation.")
 
@@ -861,11 +1418,21 @@ def page_home():
                     for i in readiness.issues:
                         st.write(f"- {i}")
 
-                # ✅ FINALIZE BUTTON (only in Review tab)
+                # Preview: validity contract (even before finalize)
+                vc_preview = build_validity_contract(
+                    assumptions=assumptions,
+                    unknowns=unknowns,
+                    review_date=st.session_state.get("review_date", None),
+                    decision_class=st.session_state.get("decision_class", ""),
+                )
+                st.markdown("---")
+                render_validity_contract(vc_preview)
+
+                # Finalize
                 submitted = st.form_submit_button(
                     "Finalize Decision",
                     use_container_width=True,
-                    disabled=(readiness.status == "BLOCK"),
+                    disabled=(readiness.status == "BLOCK" or demo_lock),
                     help="Finalize only after governance checks are complete.",
                     key="btn_finalize_decision",
                 )
@@ -931,6 +1498,23 @@ def page_home():
                         "spread": round(best_score - worst_score, 2),
                     }
 
+                    validity_contract = build_validity_contract(
+                        assumptions=assumptions,
+                        unknowns=unknowns,
+                        review_date=review_date,
+                        decision_class=decision_class,
+                    )
+
+                    exec_rec = build_executive_recommendation(
+                        outcome=outcome,
+                        final_score=final_score,
+                        confidence=confidence,
+                        readiness=readiness,
+                        explanation=explanation,
+                        playbook=playbook,
+                        sst=scenario_stress_test,
+                    )
+
                     record = {
                         "decision_id": new_id(),
                         "timestamp_utc": now_iso(),
@@ -965,6 +1549,9 @@ def page_home():
                         "readiness_blockers": readiness.blockers,
                         "readiness_issues": readiness.issues,
                         "responsibility_confirmed": responsibility_confirmed,
+                        # NEW: enterprise outputs
+                        "validity_contract": validity_contract,
+                        "executive_recommendation": exec_rec,
                     }
 
                     append_jsonl(HISTORY_PATH, record)
@@ -979,7 +1566,11 @@ def page_home():
         st.markdown("#### Decision Summary")
         st.caption("Executive snapshot (draft + last evaluation).")
 
-        badge("Draft", "info")
+        if st.session_state.demo_mode:
+            badge("DEMO (read-only)", "warn")
+        else:
+            badge("Draft", "info")
+
         st.write("**Title:**", (st.session_state.get("decision_title", "") or "").strip() or "—")
         st.write("**Owner:**", (st.session_state.get("decision_owner", "") or "").strip() or "—")
         st.write("**Type:**", st.session_state.get("decision_type", "—"))
@@ -1001,11 +1592,13 @@ def page_home():
             st.metric("Final Score", f"{r.get('final_score')} / 10")
             st.write("**Confidence:**", r.get("confidence"))
             st.caption(f"Saved: {r.get('timestamp_utc')}")
+            if r.get("is_demo"):
+                st.caption("Note: demo result is not saved to history.")
         else:
             st.caption("No evaluation yet in this session.")
 
     # ----------------------------
-    # Results section
+    # Results section (Executive-grade + contract)
     # ----------------------------
     if st.session_state.last_record:
         r = st.session_state.last_record
@@ -1013,12 +1606,28 @@ def page_home():
         decision_id = normalize_decision_id(r.get("decision_id"))
 
         st.divider()
-        st.subheader("Result")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Final Score", f"{r.get('final_score')} / 10")
-        c2.metric("Outcome", r.get("outcome"))
-        c3.metric("Confidence", r.get("confidence"))
+        st.subheader("Executive Output")
 
+        # Executive recommendation (NEW)
+        exec_rec = r.get("executive_recommendation")
+        if exec_rec:
+            render_executive_recommendation(exec_rec)
+        else:
+            # fallback for older records
+            tone = "good" if r.get("outcome") == "GO" else "warn" if r.get("outcome") == "REVIEW" else "bad"
+            badge(f"{r.get('outcome')}", tone)
+            st.metric("Final Score", f"{r.get('final_score')} / 10")
+
+        st.divider()
+
+        # Validity contract (NEW)
+        vc = r.get("validity_contract")
+        if vc:
+            render_validity_contract(vc)
+
+        st.divider()
+
+        # Explainability + playbook
         render_explainability(r.get("explanation") or {})
         st.divider()
         render_playbook(pb, key_prefix=f"{decision_id}_home")
@@ -1029,6 +1638,7 @@ def page_home():
         results = (sst.get("results") or {})
         if results:
             import pandas as pd
+
             rows_s = []
             for name in ["best", "expected", "worst"]:
                 rr = results.get(name, {})
@@ -1047,22 +1657,25 @@ def page_home():
     st.subheader("Iteration (Re-score after fixes)")
     st.caption("Creates a new v2 record linked to your last evaluated decision.")
 
-    if st.button("Create a revised version (v2)", key="btn_make_v2"):
-        base = st.session_state.get("last_record", None)
-        if base is None:
-            st.warning("No prior decision found. Evaluate a decision first.")
-        else:
-            revised = dict(base)
-            revised["decision_id"] = new_id()
-            revised["timestamp_utc"] = now_iso()
-            revised["parent_id"] = base["decision_id"]
-            revised["version"] = int(base.get("version", 1)) + 1
-            revised["title"] = f"{base.get('title','Untitled')} (Revised v{revised['version']})"
-            revised["engine_version"] = ENGINE_VERSION
-            revised["ruleset_version"] = RULESET_VERSION
+    if st.session_state.demo_mode:
+        st.info("Demo mode: iteration is disabled. Exit demo to create real versions.")
+    else:
+        if st.button("Create a revised version (v2)", key="btn_make_v2"):
+            base = st.session_state.get("last_record", None)
+            if base is None:
+                st.warning("No prior decision found. Evaluate a decision first.")
+            else:
+                revised = dict(base)
+                revised["decision_id"] = new_id()
+                revised["timestamp_utc"] = now_iso()
+                revised["parent_id"] = base["decision_id"]
+                revised["version"] = int(base.get("version", 1)) + 1
+                revised["title"] = f"{base.get('title','Untitled')} (Revised v{revised['version']})"
+                revised["engine_version"] = ENGINE_VERSION
+                revised["ruleset_version"] = RULESET_VERSION
 
-            append_jsonl(HISTORY_PATH, revised)
-            st.success("Revised version saved. Go to History or Dashboard → Compare.")
+                append_jsonl(HISTORY_PATH, revised)
+                st.success("Revised version saved. Go to History or Dashboard → Compare.")
 
 
 # ----------------------------
