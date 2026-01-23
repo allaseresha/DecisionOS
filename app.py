@@ -490,17 +490,27 @@ def page_dashboard():
     )
 
     cA, cB = st.columns(2)
+
     with cA:
         st.subheader("Outcome distribution")
-        st.bar_chart(outcome_df.set_index("Outcome")) if len(outcome_df) else st.write("No outcome data.")
+        if not outcome_df.empty and outcome_df["Count"].sum() > 0:
+            chart_df = outcome_df.set_index("Outcome")[["Count"]]
+            _ = st.bar_chart(chart_df)
+        else:
+            st.info("No outcome data available yet.")
+
     with cB:
         st.subheader("Confidence distribution")
-        st.bar_chart(conf_df.set_index("Confidence")) if len(conf_df) else st.write("No confidence data.")
+        if not conf_df.empty and conf_df["Count"].sum() > 0:
+            chart_df = conf_df.set_index("Confidence")[["Count"]]
+            _ = st.bar_chart(chart_df)
+        else:
+            st.info("No confidence data available yet.")
 
     st.subheader("Most common weak dimensions")
     if metrics.get("weak_dimensions"):
         weak_df = pd.DataFrame(metrics["weak_dimensions"], columns=["Dimension", "Count"])
-        st.bar_chart(weak_df.set_index("Dimension"))
+        _ = st.bar_chart(weak_df.set_index("Dimension"))
     else:
         st.write("Not enough data yet.")
 
@@ -518,7 +528,7 @@ def page_dashboard():
         df_gap = df_ins.dropna(subset=["Calibration Gap"]).set_index("Type")[["Calibration Gap"]]
         if len(df_gap) > 0:
             st.subheader("Confidence calibration by type")
-            st.bar_chart(df_gap)
+            _ = st.bar_chart(df_gap)
 
     st.markdown("---")
     st.subheader("Template Improvement Intelligence")
